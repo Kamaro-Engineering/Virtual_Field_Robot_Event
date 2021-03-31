@@ -1,6 +1,6 @@
 # This is a basic workflow to help you get started with Actions
 
-name: CI
+name: ROS-CI
 
 # Controls when the action will run. 
 on:
@@ -14,15 +14,15 @@ on:
   workflow_dispatch:
 
 jobs:
-  test_docker: # On Linux, iterates on all ROS 1, and ROS 2 distributions.
+  Ubuntu: # On Linux, iterates on all ROS 1, and ROS 2 distributions.
     runs-on: ubuntu-latest
     strategy:
       matrix:
         ros_distribution:
           - melodic
           - noetic
-          - eloquent
-          - foxy
+        #  - eloquent
+        #  - foxy
 
         # Define the Docker image(s) associated with each ROS distribution.
         # The include syntax allows additional variables to be defined, like
