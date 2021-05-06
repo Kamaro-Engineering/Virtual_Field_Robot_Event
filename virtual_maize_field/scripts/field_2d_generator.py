@@ -132,10 +132,11 @@ class Field2DGenerator:
         metric_width = metric_x_max - metric_x_min + 4
         metric_height = metric_y_max - metric_y_min + 4
 
-        resolution = 0.02
+        resolution = 0.02 #FIXME dynamic resolution 
         min_image_size = int(
             np.ceil(max(metric_width / resolution, metric_height / resolution))
         )
+        # gazebo expects heightmap in format 2**n -1
         image_size = int(2 ** np.ceil(np.log2(min_image_size))) + 1
 
         # Generate noise
@@ -156,25 +157,46 @@ class Field2DGenerator:
         heightmap -= heightmap.min()
         heightmap /= heightmap.max()
 
+        DITCH_DEPTH = 0.3    #m
+        DITCH_DISTANCE = 2 #m
+        max_elevation = self.wd.structure["params"]["ground_max_elevation"]
+
+        self.heightmap_elevation = DITCH_DEPTH + (max_elevation / 2)
+
+        heightmap *= ((max_elevation) / self.heightmap_elevation)
+        heightmap += ((DITCH_DEPTH - (max_elevation / 2)) / self.heightmap_elevation)
+
+        assert(heightmap.max() <= 1)
+        assert(heightmap.min() >= 0)
+
         offset = image_size // 2
+        def metric_to_pixel(pos):
+            return int(pos // resolution) + offset
+
         # Make plant placements flat and save the heights for the sdf renderer
         self.placements_ground_height = []
         for mx, my in self.placements:
-            px = int(mx // resolution) + offset
-            py = int(my // resolution) + offset
+            px = metric_to_pixel(mx)
+            py = metric_to_pixel(my)
 
             height = heightmap[py, px]
-            height = 1
+            #height = 1
             heightmap = cv2.circle(heightmap, (px, py), 3, height, -1)
             self.placements_ground_height.append(
-                self.wd.structure["params"]["ground_max_elevation"] * height
+                self.heightmap_elevation * height
             )
+
+        # poor man's ditch
+        heightmap[:metric_to_pixel(metric_y_min - DITCH_DISTANCE), : ] = 0.01
+        heightmap[metric_to_pixel(metric_y_max + DITCH_DISTANCE):, : ] = 0.01
+        heightmap[ :, :metric_to_pixel(metric_x_min - DITCH_DISTANCE)] = 0.01
+        heightmap[ :, metric_to_pixel(metric_x_max + DITCH_DISTANCE):] = 0.01
 
         # Convert to grayscale
         self.heightmap = (255 * heightmap[::-1, :]).astype(np.uint8)
 
-        # Calc heightmap position
         self.metric_size = image_size * resolution
+        # Calc heightmap position. Currently unused, overwritten in @ref fix_gazebo
         self.heightmap_position = [
             metric_x_min - 2 + 0.5 * self.metric_size,
             metric_y_min - 2 + 0.5 * self.metric_size,
@@ -184,7 +206,8 @@ class Field2DGenerator:
         # move the plants to the center of the flat circles
         self.placements -= 0.01
 
-        # set heightmap position to origin
+        # set heightmap position to origin, see gazebo issue 2996:
+        # https://github.com/osrf/gazebo/issues/2996
         self.heightmap_position = [0, 0]
 
     def render_to_template(self):
@@ -238,6 +261,6 @@ class Field2DGenerator:
                     "x": self.heightmap_position[0],
                     "y": self.heightmap_position[1],
                 },
-                "max_elevation": 0.2,
+                "max_elevation": self.heightmap_elevation,
             },
         )
