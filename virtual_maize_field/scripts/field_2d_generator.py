@@ -123,21 +123,28 @@ class Field2DGenerator:
         pass
 
     def generate_ground(self):
+
+        DITCH_DEPTH = 0.3  #m
+        DITCH_DISTANCE = 2 #m
+        DITCH_WIDTH = 0.4  #m
+
         # Calculate image resolution
         metric_x_min = self.placements[:, 0].min()
         metric_x_max = self.placements[:, 0].max()
         metric_y_min = self.placements[:, 1].min()
         metric_y_max = self.placements[:, 1].max()
 
-        metric_width = metric_x_max - metric_x_min + 4
-        metric_height = metric_y_max - metric_y_min + 4
+        metric_width = metric_x_max - metric_x_min + 2 * DITCH_DISTANCE + 1
+        metric_height = metric_y_max - metric_y_min + 2 * DITCH_DISTANCE + 1
 
-        resolution = 0.02 #FIXME dynamic resolution 
+        resolution = 0.02 # min resolution
         min_image_size = int(
             np.ceil(max(metric_width / resolution, metric_height / resolution))
         )
         # gazebo expects heightmap in format 2**n -1
         image_size = int(2 ** np.ceil(np.log2(min_image_size))) + 1
+
+        resolution = resolution * (min_image_size / image_size)
 
         # Generate noise
         heightmap = np.zeros((image_size, image_size))
@@ -157,9 +164,6 @@ class Field2DGenerator:
         heightmap -= heightmap.min()
         heightmap /= heightmap.max()
 
-        DITCH_DEPTH = 0.3  #m
-        DITCH_DISTANCE = 2 #m
-        DITCH_WIDTH = 0.4  #m
         max_elevation = self.wd.structure["params"]["ground_max_elevation"]
 
         self.heightmap_elevation = DITCH_DEPTH + (max_elevation / 2)
