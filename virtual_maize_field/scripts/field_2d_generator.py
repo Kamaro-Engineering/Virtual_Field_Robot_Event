@@ -157,17 +157,16 @@ class Field2DGenerator:
         heightmap -= heightmap.min()
         heightmap /= heightmap.max()
 
-        DITCH_DEPTH = 0.3    #m
+        DITCH_DEPTH = 0.3  #m
         DITCH_DISTANCE = 2 #m
+        DITCH_WIDTH = 0.4  #m
         max_elevation = self.wd.structure["params"]["ground_max_elevation"]
 
         self.heightmap_elevation = DITCH_DEPTH + (max_elevation / 2)
 
         heightmap *= ((max_elevation) / self.heightmap_elevation)
-        heightmap += ((DITCH_DEPTH - (max_elevation / 2)) / self.heightmap_elevation)
 
-        assert(heightmap.max() <= 1)
-        assert(heightmap.min() >= 0)
+        field_mask = np.ones((image_size, image_size))
 
         offset = image_size // 2
         def metric_to_pixel(pos):
@@ -179,6 +178,8 @@ class Field2DGenerator:
             px = metric_to_pixel(mx)
             py = metric_to_pixel(my)
 
+            field_mask = cv2.circle(field_mask, (px, py), int((DITCH_DISTANCE + DITCH_WIDTH) / resolution), 0, -1)
+
             height = heightmap[py, px]
             #height = 1
             heightmap = cv2.circle(heightmap, (px, py), 3, height, -1)
@@ -186,11 +187,19 @@ class Field2DGenerator:
                 self.heightmap_elevation * height
             )
 
-        # poor man's ditch
-        heightmap[:metric_to_pixel(metric_y_min - DITCH_DISTANCE), : ] = 0.01
-        heightmap[metric_to_pixel(metric_y_max + DITCH_DISTANCE):, : ] = 0.01
-        heightmap[ :, :metric_to_pixel(metric_x_min - DITCH_DISTANCE)] = 0.01
-        heightmap[ :, metric_to_pixel(metric_x_max + DITCH_DISTANCE):] = 0.01
+        # raise field to create a ditch
+        for mx, my in self.placements:
+            px = metric_to_pixel(mx)
+            py = metric_to_pixel(my)
+            field_mask = cv2.circle(field_mask, (px, py), int(DITCH_DISTANCE / resolution), 1, -1)
+
+        blur_size = (int(0.2 / resolution) // 2) * 2 + 1
+        field_mask = cv2.GaussianBlur(field_mask, (blur_size, blur_size), 0)
+
+        heightmap += ((DITCH_DEPTH - (max_elevation / 2)) / self.heightmap_elevation) * field_mask
+
+        assert(heightmap.max() <= 1)
+        assert(heightmap.min() >= 0)
 
         # Convert to grayscale
         self.heightmap = (255 * heightmap[::-1, :]).astype(np.uint8)
