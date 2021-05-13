@@ -207,9 +207,8 @@ class Field2DGenerator:
         self.object_types = np.concatenate((weed_types, litter_types))
 
     def generate_ground(self):
-        DITCH_DEPTH = 0.3  #m
-        DITCH_DISTANCE = 2 #m
-        DITCH_WIDTH = 0.4  #m
+        ditch_depth = self.wd.structure["params"]["ground_ditch_depth"]
+        ditch_distance = self.wd.structure["params"]["ground_headland"]
 
         self.crop_placements = np.vstack(self.rows)
 
@@ -223,15 +222,15 @@ class Field2DGenerator:
         metric_y_min = self.placements[:, 1].min()
         metric_y_max = self.placements[:, 1].max()
 
-        metric_width = metric_x_max - metric_x_min + 2 * DITCH_DISTANCE + 1
-        metric_height = metric_y_max - metric_y_min + 2 * DITCH_DISTANCE + 1
+        metric_width = metric_x_max - metric_x_min + 2 * ditch_distance + 1
+        metric_height = metric_y_max - metric_y_min + 2 * ditch_distance + 1
 
-        resolution = self.wd.structure["params"]["ground_resolution"] # min resolution
-        min_image_size = int(np.ceil(max(metric_width / resolution, metric_height / resolution)))
+        min_resolution = self.wd.structure["params"]["ground_resolution"] # min resolution
+        min_image_size = int(np.ceil(max(metric_width / min_resolution, metric_height / min_resolution)))
         # gazebo expects heightmap in format 2**n -1
         image_size = int(2 ** np.ceil(np.log2(min_image_size))) + 1
 
-        self.resolution = resolution * (min_image_size / image_size)
+        self.resolution = min_resolution * (min_image_size / image_size)
 
         # Generate noise
         heightmap = np.zeros((image_size, image_size))
@@ -253,12 +252,12 @@ class Field2DGenerator:
 
         max_elevation = self.wd.structure["params"]["ground_elevation_max"]
 
-        self.heightmap_elevation = DITCH_DEPTH + (max_elevation / 2)
+        self.heightmap_elevation = ditch_depth + (max_elevation / 2)
 
         heightmap *= ((max_elevation) / self.heightmap_elevation)
-        field_height = ((DITCH_DEPTH - (max_elevation / 2)) / self.heightmap_elevation)
+        field_height = ((ditch_depth - (max_elevation / 2)) / self.heightmap_elevation)
 
-        field_mask = np.ones((image_size, image_size))
+        field_mask = np.zeros((image_size, image_size))
 
         offset = image_size // 2
         def metric_to_pixel(pos):
@@ -273,17 +272,14 @@ class Field2DGenerator:
             px = metric_to_pixel(mx)
             py = metric_to_pixel(my)
 
-            field_mask = cv2.circle(field_mask, (px, py), int((DITCH_DISTANCE + DITCH_WIDTH) / self.resolution), 0, -1)
+            field_mask = cv2.circle(field_mask, (px, py), int((ditch_distance) / self.resolution), 1, -1)
 
             height = heightmap[py, px]
             heightmap = cv2.circle(heightmap, (px, py), flatspot_radius, height, -1)
-            self.placements_ground_height.append(field_height + height)
+            self.placements_ground_height.append(
+                (field_height + height) * self.heightmap_elevation
+            )
 
-        # raise field to create a ditch
-        for mx, my in self.placements:
-            px = metric_to_pixel(mx)
-            py = metric_to_pixel(my)
-            field_mask = cv2.circle(field_mask, (px, py), int(DITCH_DISTANCE / self.resolution), 1, -1)
 
         blur_size = (int(0.2 / self.resolution) // 2) * 2 + 1
         field_mask = cv2.GaussianBlur(field_mask, (blur_size, blur_size), 0)
@@ -376,6 +372,8 @@ class Field2DGenerator:
             heightmap={
                 "size": self.metric_size,
                 "pos": {"x": self.heightmap_position[0], "y": self.heightmap_position[1]},
-                "max_elevation": self.heightmap_elevation,
+                "max_elevation": self.wd.structure["params"]["ground_elevation_max"],
+                "ditch_depth": self.wd.structure["params"]["ground_ditch_depth"],
+                "total_height": self.heightmap_elevation
             },
         )
