@@ -42,7 +42,6 @@ class Field2DGenerator:
 
     def generate(self):
         self.chain_segments()
-        self.center_plants()
         self.place_objects()
         self.generate_ground()
         self.fix_gazebo()
@@ -231,6 +230,7 @@ class Field2DGenerator:
         image_size = int(2 ** np.ceil(np.log2(min_image_size))) + 1
 
         self.resolution = min_resolution * (min_image_size / image_size)
+        self.metric_size = image_size * self.resolution
 
         # Generate noise
         heightmap = np.zeros((image_size, image_size))
@@ -259,18 +259,14 @@ class Field2DGenerator:
 
         field_mask = np.zeros((image_size, image_size))
 
-        offset = image_size // 2
-        def metric_to_pixel(pos):
-            return int(pos // self.resolution) + offset
-
         # Make plant placements flat and save the heights for the sdf renderer
         PLANT_FOOTPRINT = (2 * 0.02**2) ** 0.5
         flatspot_radius = int((PLANT_FOOTPRINT / 2) // self.resolution) + 2
 
         self.placements_ground_height = []
         for mx, my in self.placements:
-            px = metric_to_pixel(mx)
-            py = metric_to_pixel(my)
+            px = int((ditch_distance + 0.5 + mx - metric_x_min) // self.resolution)
+            py = int((ditch_distance + 0.5 + my - metric_y_min) // self.resolution)
 
             field_mask = cv2.circle(field_mask, (px, py), int((ditch_distance) / self.resolution), 1, -1)
 
@@ -292,20 +288,17 @@ class Field2DGenerator:
         # Convert to grayscale
         self.heightmap = (255 * heightmap[::-1, :]).astype(np.uint8)
 
-        self.metric_size = image_size * self.resolution
-        # Calc heightmap position. Currently unused, overwritten in @ref fix_gazebo
+        # Calc heightmap position.
         self.heightmap_position = [
-            metric_x_min - 2 + 0.5 * self.metric_size,
-            metric_y_min - 2 + 0.5 * self.metric_size,
+            metric_x_min - ditch_distance - 0.5 + 0.5 * self.metric_size,
+            metric_y_min - ditch_distance - 0.5 + 0.5 * self.metric_size,
         ]
 
     def fix_gazebo(self):
+        pass
         # move the plants to the center of the flat circles
-        self.crop_placements -= self.resolution / 2
-        self.object_placements -= self.resolution / 2
-
-        # set heightmap position to origin
-        self.heightmap_position = [0, 0]
+        #self.crop_placements -= self.resolution / 2
+        #self.object_placements -= self.resolution / 2
 
     def render_to_template(self):
         def into_dict(xy, ground_height, radius, height, mass, m_type, index):
