@@ -1,13 +1,15 @@
-import sys
 import jinja2
 import numpy as np
 import cv2
 import os
 import rospkg
 from matplotlib import pyplot as plt
+import shapely
+import shapely.geometry as geometry
 
 from world_description import WorldDescription
 from row_segments import StraightSegment, CurvedSegment, IslandSegment
+from utils import BoundedGaussian
 
 
 class Field2DGenerator:
@@ -21,15 +23,31 @@ class Field2DGenerator:
             segment.render()
 
         # Plants
-        plt.scatter(self.placements[:, 0], self.placements[:, 1], color="c", marker=".")
+        plt.scatter(self.crop_placements[:, 0], self.crop_placements[:, 1], color="c", marker=".")
+
+    def plot_field(self):
+        plt.plot(*self.field_poly.exterior.xy)
+        plt.figure(figsize=(10, 10))
+        plt.gca().axis("equal")
+        plt.scatter(self.crop_placements[:, 0], self.crop_placements[:, 1], color="g", marker=".")
+        if self.weed_placements.ndim == 2:
+            plt.scatter(
+                self.weed_placements[:, 0], self.weed_placements[:, 1], color="r", marker="."
+            )
+        if self.litter_placements.ndim == 2:
+            plt.scatter(
+                self.litter_placements[:, 0], self.litter_placements[:, 1], color="b", marker="."
+            )
+        self.minimap = plt
 
     def generate(self):
         self.chain_segments()
         self.center_plants()
-        self.seed_weeds()
+        self.place_objects()
         self.generate_ground()
         self.fix_gazebo()
         self.render_to_template()
+        self.plot_field()
         return [self.sdf, self.heightmap]
 
     def chain_segments(self):
@@ -50,17 +68,14 @@ class Field2DGenerator:
 
         # Placement parameters
         offset = None
-        self.placements = [[] for _ in range(rows)]
+        self.crop_placements = [[] for _ in range(rows)]
 
         # Chain all segments from the world description
         self.segments = []
         for segment in self.wd.structure["segments"]:
             if segment["type"] == "straight":
                 seg = StraightSegment(
-                    current_p,
-                    current_dir,
-                    self.wd.structure["params"],
-                    segment["length"],
+                    current_p, current_dir, self.wd.structure["params"], segment["length"]
                 )
             elif segment["type"] == "curved":
                 seg = CurvedSegment(
@@ -86,48 +101,122 @@ class Field2DGenerator:
 
             # Collect all plant placements
             seg_placements, offset = seg.placements(offset)
-            for row, seg_row in zip(self.placements, seg_placements):
+            for row, seg_row in zip(self.crop_placements, seg_placements):
                 row.extend(seg_row)
 
             # Update current end points, direction and row length
             current_p, current_dir = seg.end()
             self.segments.append(seg)
 
-        self.placements = np.vstack(self.placements)
+        # generate holes in the maize field
+        self.rows = []
+        for row in self.crop_placements:
+            row = np.vstack(row)
 
-        # TODO This is a an unbounded normal distribution, which causes problems with
-        # the plant placements. There will be some outliers each time, because the
-        # number of plants is so heigh
-        self.placements += np.random.normal(
-            scale=self.wd.structure["params"]["plant_placement_error_max"],
-            size=self.placements.shape,
+            # generate indexes of the end of the hole
+            probs = np.random.sample(row.shape[0])
+            probs = probs < self.wd.structure["params"]["hole_prob"]
+
+            # iterate in reverse order, and remove plants in the holes
+            i = probs.shape[0] - 1
+            while i > 0:
+                if probs[i]:
+                    hole_size = np.random.randint(1, self.wd.structure["params"]["hole_size_max"])
+                    row = np.delete(row, slice(max(0, i - hole_size), i), axis=0)
+                    i = i - hole_size
+
+                i = i - 1
+            self.rows.append(row)
+
+        # Add bounden noise to placements
+        bg = BoundedGaussian(
+            -self.wd.structure["params"]["plant_placement_error_max"],
+            self.wd.structure["params"]["plant_placement_error_max"],
         )
+
+        # TODO There is a better way to do this
+        for i in range(len(self.rows)):
+            new_row = []
+            for x, y in self.rows[i]:
+                x += bg.get()
+                y += bg.get()
+                new_row.append([x, y])
+
+            self.rows[i] = np.array(new_row)
 
     # Because the heightmap must be square and has to have a side length of 2^n + 1
     # this means that we could have smaller maps, by centering the placements around 0,0
     def center_plants(self):
-        x_min = self.placements[:, 0].min()
-        y_min = self.placements[:, 1].min()
+        self.crop_placements = np.vstack(self.rows)
 
-        self.placements -= np.array([x_min, y_min])
+        x_min = self.crop_placements[:, 0].min()
+        y_min = self.crop_placements[:, 1].min()
 
-        x_max = self.placements[:, 0].max()
-        y_max = self.placements[:, 1].max()
+        x_max = self.crop_placements[:, 0].max()
+        y_max = self.crop_placements[:, 1].max()
 
-        self.placements -= np.array([x_max, y_max]) / 2
+        for i in range(len(self.rows)):
+            self.rows[i] -= np.array([x_min, y_min])
+            self.rows[i] -= np.array([x_max, y_max]) / 2
 
     # The function calculates the placements of the weed plants and
     # stores them under self.weeds : np.array([[x,y],[x,y],...])
-    def seed_weeds(self):
-        self.weeds = np.array([])
-        pass
+    def place_objects(self):
+        def random_points_within(poly, num_points):
+            min_x, min_y, max_x, max_y = poly.bounds
+
+            points = []
+
+            while len(points) < num_points:
+                np_point = [np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y)]
+                random_point = shapely.geometry.Point(np_point)
+                if random_point.within(poly):
+                    points.append(np_point)
+
+            return np.array(points)
+
+        # Get outher boundary of the of the crops
+        outer_plants = np.concatenate((self.rows[0], np.flipud(self.rows[-1])))
+        self.field_poly = geometry.Polygon(outer_plants)
+
+        # place x_nr of weeds within the field area
+        self.weed_placements = random_points_within(
+            self.field_poly, self.wd.structure["params"]["weeds"]
+        )
+        weed_types = np.random.choice(
+            self.wd.structure["params"]["weed_types"].split(","),
+            self.wd.structure["params"]["weeds"],
+        )
+
+        # place y_nr of litter within the field area
+        self.litter_placements = random_points_within(
+            self.field_poly, self.wd.structure["params"]["litters"]
+        )
+        litter_types = np.random.choice(
+            self.wd.structure["params"]["litter_types"].split(","),
+            self.wd.structure["params"]["litters"],
+        )
+
+        # TODO Thijs
+        # place start marker at the beginning of the field
+
+        # TODO Thijs
+        # place location markers at the desginated locations
+
+        self.object_placements = np.concatenate((self.weed_placements, self.litter_placements))
+        self.object_types = np.concatenate((weed_types, litter_types))
 
     def generate_ground(self):
-
         DITCH_DEPTH = 0.3  #m
         DITCH_DISTANCE = 2 #m
         DITCH_WIDTH = 0.4  #m
 
+        self.crop_placements = np.vstack(self.rows)
+
+        if self.object_placements.ndim == 2:
+            self.placements = np.concatenate((self.crop_placements, self.object_placements), axis=0)
+        else:
+            self.placements = self.crop_placements
         # Calculate image resolution
         metric_x_min = self.placements[:, 0].min()
         metric_x_max = self.placements[:, 0].max()
@@ -137,14 +226,12 @@ class Field2DGenerator:
         metric_width = metric_x_max - metric_x_min + 2 * DITCH_DISTANCE + 1
         metric_height = metric_y_max - metric_y_min + 2 * DITCH_DISTANCE + 1
 
-        resolution = 0.02 # min resolution
-        min_image_size = int(
-            np.ceil(max(metric_width / resolution, metric_height / resolution))
-        )
+        resolution = self.wd.structure["params"]["ground_resolution"] # min resolution
+        min_image_size = int(np.ceil(max(metric_width / resolution, metric_height / resolution)))
         # gazebo expects heightmap in format 2**n -1
         image_size = int(2 ** np.ceil(np.log2(min_image_size))) + 1
 
-        resolution = resolution * (min_image_size / image_size)
+        self.resolution = resolution * (min_image_size / image_size)
 
         # Generate noise
         heightmap = np.zeros((image_size, image_size))
@@ -164,7 +251,7 @@ class Field2DGenerator:
         heightmap -= heightmap.min()
         heightmap /= heightmap.max()
 
-        max_elevation = self.wd.structure["params"]["ground_max_elevation"]
+        max_elevation = self.wd.structure["params"]["ground_elevation_max"]
 
         self.heightmap_elevation = DITCH_DEPTH + (max_elevation / 2)
 
@@ -174,7 +261,7 @@ class Field2DGenerator:
 
         offset = image_size // 2
         def metric_to_pixel(pos):
-            return int(pos // resolution) + offset
+            return int(pos // self.resolution) + offset
 
         # Make plant placements flat and save the heights for the sdf renderer
         self.placements_ground_height = []
@@ -182,11 +269,10 @@ class Field2DGenerator:
             px = metric_to_pixel(mx)
             py = metric_to_pixel(my)
 
-            field_mask = cv2.circle(field_mask, (px, py), int((DITCH_DISTANCE + DITCH_WIDTH) / resolution), 0, -1)
+            field_mask = cv2.circle(field_mask, (px, py), int((DITCH_DISTANCE + DITCH_WIDTH) / self.resolution), 0, -1)
 
             height = heightmap[py, px]
-            #height = 1
-            heightmap = cv2.circle(heightmap, (px, py), 3, height, -1)
+            heightmap = cv2.circle(heightmap, (px, py), 2, height, -1)
             self.placements_ground_height.append(
                 self.heightmap_elevation * height
             )
@@ -195,9 +281,9 @@ class Field2DGenerator:
         for mx, my in self.placements:
             px = metric_to_pixel(mx)
             py = metric_to_pixel(my)
-            field_mask = cv2.circle(field_mask, (px, py), int(DITCH_DISTANCE / resolution), 1, -1)
+            field_mask = cv2.circle(field_mask, (px, py), int(DITCH_DISTANCE / self.resolution), 1, -1)
 
-        blur_size = (int(0.2 / resolution) // 2) * 2 + 1
+        blur_size = (int(0.2 / self.resolution) // 2) * 2 + 1
         field_mask = cv2.GaussianBlur(field_mask, (blur_size, blur_size), 0)
 
         heightmap += ((DITCH_DEPTH - (max_elevation / 2)) / self.heightmap_elevation) * field_mask
@@ -208,7 +294,7 @@ class Field2DGenerator:
         # Convert to grayscale
         self.heightmap = (255 * heightmap[::-1, :]).astype(np.uint8)
 
-        self.metric_size = image_size * resolution
+        self.metric_size = image_size * self.resolution
         # Calc heightmap position. Currently unused, overwritten in @ref fix_gazebo
         self.heightmap_position = [
             metric_x_min - 2 + 0.5 * self.metric_size,
@@ -217,18 +303,16 @@ class Field2DGenerator:
 
     def fix_gazebo(self):
         # move the plants to the center of the flat circles
-        self.placements -= 0.01
+        self.crop_placements -= self.resolution / 2
+        self.object_placements -= self.resolution / 2
 
-        # set heightmap position to origin, see gazebo issue 2996:
-        # https://github.com/osrf/gazebo/issues/2996
+        # set heightmap position to origin
         self.heightmap_position = [0, 0]
 
     def render_to_template(self):
-        def into_dict(xy, ground_height, radius, height, mass, index):
+        def into_dict(xy, ground_height, radius, height, mass, m_type, index):
             coordinate = dict()
-            coordinate["type"] = np.random.choice(
-                self.wd.structure["params"]["plant_types"].split(",")
-            )
+            coordinate["type"] = m_type
             inertia = dict()
             inertia["ixx"] = (mass * (3 * radius ** 2 + height ** 2)) / 12.0
             inertia["iyy"] = (mass * (3 * radius ** 2 + height ** 2)) / 12.0
@@ -240,8 +324,7 @@ class Field2DGenerator:
             coordinate["z"] = ground_height
             coordinate["radius"] = (
                 radius
-                + (2 * np.random.rand() - 1)
-                * self.wd.structure["params"]["plant_radius_noise"]
+                + (2 * np.random.rand() - 1) * self.wd.structure["params"]["plant_radius_noise"]
             )
             if coordinate["type"] == "cylinder":
                 coordinate["height"] = height
@@ -249,6 +332,7 @@ class Field2DGenerator:
             coordinate["yaw"] = np.random.rand() * 2.0 * np.pi
             return coordinate
 
+        # plant crops
         coordinates = [
             into_dict(
                 plant,
@@ -256,10 +340,29 @@ class Field2DGenerator:
                 self.wd.structure["params"]["plant_radius"],
                 self.wd.structure["params"]["plant_height_min"],
                 self.wd.structure["params"]["plant_mass"],
+                np.random.choice(self.wd.structure["params"]["crop_types"].split(",")),
                 i,
             )
-            for i, plant in enumerate(self.placements)
+            for i, plant in enumerate(self.crop_placements)
         ]
+
+        # place objects
+        object_coordinates = [
+            into_dict(
+                plant,
+                self.placements_ground_height[i + len(self.crop_placements)],
+                self.wd.structure["params"]["plant_radius"],
+                self.wd.structure["params"]["plant_height_min"],
+                self.wd.structure["params"]["plant_mass"],
+                "ghost_%s" % self.object_types[i]
+                if self.wd.structure["params"]["ghost_objects"]
+                else self.object_types[i],
+                i,
+            )
+            for i, plant in enumerate(self.object_placements)
+        ]
+
+        coordinates.extend(object_coordinates)
 
         pkg_path = rospkg.RosPack().get_path("virtual_maize_field")
         template_path = os.path.join(pkg_path, "scripts/field.world.template")
@@ -270,10 +373,7 @@ class Field2DGenerator:
             seed=self.wd.structure["params"]["seed"],
             heightmap={
                 "size": self.metric_size,
-                "pos": {
-                    "x": self.heightmap_position[0],
-                    "y": self.heightmap_position[1],
-                },
+                "pos": {"x": self.heightmap_position[0], "y": self.heightmap_position[1]},
                 "max_elevation": self.heightmap_elevation,
             },
         )

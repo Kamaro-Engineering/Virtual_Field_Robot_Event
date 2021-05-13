@@ -27,7 +27,7 @@ Additional you'll need the following packages:
 # melodic
 rosdep install virtual_maize_field
 sudo apt install python3-pip
-sudo pip3 install -U jinja2 rospkg
+sudo pip3 install -U jinja2 rospkg opencv-python matplotlib shapely
 
 # noetic
 rosdep install virtual_maize_field
@@ -56,6 +56,8 @@ usage: world_description.py [-h] [--row_length ROW_LENGTH]
                             [--plant_radius PLANT_RADIUS] [--plant_radius_noise PLANT_RADIUS_NOISE] 
                             [--plant_placement_error_max PLANT_PLACEMENT_ERROR_MAX] 
                             [--plant_mass PLANT_MASS]
+                            [--hole_prob HOLE_PROB]
+                            [--max_hole_size MAX_HOLE_SIZE]
                             [--plant_types PLANT_TYPES] 
                             [--load_from_file LOAD_FROM_FILE] 
                             [--seed SEED]
@@ -104,23 +106,41 @@ optional arguments:
                         default_value: 0.05
   --plant_mass PLANT_MASS
                         default_value: 0.3
-  --plant_types PLANT_TYPES
+  --hole_prob HOLE_PROB
+                        default_value: 0.0
+  --max_hole_size MAX_HOLE_SIZE
+                        default_value: 7
+  --crop_types CROP_TYPES
                         default_value: maize_01,maize_02
+  --litters LITTERS
+                        default_value: 0
+  --litter_types LITTER_TYPES
+                        default_value: ale, beer, coke_can, retro_pepsi_can
+  --crop_types CROP_TYPES
+                        default_value: maize_01, maize_02
+  --weeds WEEDS
+                        default_value: 0
+  --weed_types WEED_TYPES
+                        default_value: nettle, unknown_weed
+  --ghost_objects GHOST_OBJECTS
+                        default_value: False
   --load_from_file LOAD_FROM_FILE
                         default_value: None
   --seed SEED           default_value: None
 ```
 
 ## Sample Worlds
+In the script folder, bash files to generate sample worlds are located. The parameters are chosen to match the task description from https://www.fieldrobot.com/event/index.php/contest/
 | Name | Parameters | Description |
 |:---- |:--------- |:----------- |
-| *simple_row_level_0.world* | `--plant_radius=0.03 --max_angle_variation=0 --plant_height=0.75 --radius_noise_range=0 --position_div=0 --types=cylinder` | One row with grid based cylinders. |
-| *simple_row_level_1.world* | `--max_angle_variation=0 --position_div=0` | One row with grid based plants. |
-| *simple_row_level_2.world* | `--max_angle_variation=0` | One row with more natural plant placement. |
-| *simple_row_level_3.world* | default | One row with little curvature. |
-| *simple_row_level_4.world* | `--max_angle_variation=0.3` | One row with curvature. |
-| *simple_row_level_5.world* | `--dropout=0.1` | Level 3 with gaps |
-| *simple_row_level_6.world* | `--max_angle_variation=0.3 --dropout=0.1` | Level 4 with gaps |
+| *create_task_1.sh* | `--row_length 10 --rows_left 0 --rows_right 11 --rows_curve_budget 0.78539816339 --row_segments straight,curved --row_segment_curved_radius_min 4.0 --row_segment_curved_radius_max 5.0` | Task 1, curved rows without holes |
+| *create_task_1_mini.sh* | `--row_length 5 --rows_left 0 --rows_right 5 --rows_curve_budget 0.78539816339 --row_segments straight,curved --row_segment_curved_radius_min 4.0 --row_segment_curved_radius_max 5.0` | A smaller version of task 1, requiring less computer power |
+| *create_task_2.sh* | `--row_length 7 --rows_left 0 --rows_right 11 --row_segments straight --hole_prob 0.04 --hole_size_max 7` | Task 2, straight rows with holes |
+| *create_task_2_mini.sh* | `--row_length 3.5 --rows_left 0 --rows_right 7 --row_segments straight --hole_prob 0.04 --hole_size_max 7` | A smaller version of task 2, requiring less computer power |
+| *create_task_3.sh* | `--row_length 7 --rows_left 0 --rows_right 11 --row_segments straight --hole_prob 0.04 --hole_size_max 7 --litters 5 --weeds 5 --ghost_objects true` | Task 3, similar crop rows as in task_2 but with cans, bottles and weeds spread throughout the field. The cans, bottles and weeds have no collision box and are static. |
+| *create_task_3_mini.sh* | `--row_length 3.5 --rows_left 0 --rows_right 7 --row_segments straight --hole_prob 0.04 --hole_size_max 7 --litters 5 --weeds 5 --ghost_objects true` | A smaller version of task 3, requiring less computer power |
+| *create_task_4.sh* | `--row_length 7 --rows_left 0 --rows_right 11 --row_segments straight --hole_prob 0.04 --hole_size_max 7 --litters 5 --weeds 5` | Task 4, similar crop rows as in task_2 but with cans, bottles and weeds spread throughout the field. The cans, bottles and weeds have a collision box and can be picked up. |
+| *create_task_4_mini.sh* | `--row_length 3.5 --rows_left 0 --rows_right 7 --row_segments straight --hole_prob 0.04 --hole_size_max 7 --litters 5 --weeds 5` | A smaller version of task 4, requiring less computer power |
 
 ## Launching worlds
 The launch file to launch the worlds is called `simulation.launch`. You can launch the launch file by running `roslaunch virtual_maize_field simulation.launch`. By default the launch file will launch `generated_world.world`. You can launch any world by using the `world_name` arg. e.g. `roslaunch virtual_maize_field simulation.launch world_name:=simple_row_level_1.world`.
@@ -135,3 +155,14 @@ Virtual Maize Field is copyright (C) 2021 *Farm Technology Group of Wageningen U
 | [Maize 02](models/maize_02/model.config) | `models/maize_02/` | 2021 *Kamaro Engineering e.V.* | [![License: CC BY-SA 4.0](https://img.shields.io/badge/License-CC%20BY--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-sa/4.0/) |
 | [Stone 01](models/stone_01/model.config) | `models/stone_01/` | 2020 *Andrea Spognetta* | [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/) |
 | [Stone 02](models/stone_02/model.config) | `models/stone_02/` | 2014 *Sascha Henrichs* | [![License: CC BY 4.0](https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/) |
+| [Ale](models/ale/model.config) | `models/ale/` | 2017 *elouisetrewartha* | [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/) |
+| [Beer](models/beer/model.config) | `models/beer/` | ? *Maurice Fallon* | ? |
+| [Coke Can](models/coke_can/model.config) | `models/coke_can/` | ? *John Hsu* | ? |
+| [Nettle](models/nettle/model.config) | `models/nettle/` | 2019 *LadyIReyna* | [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/) |
+| [Retro Pepsi Can](models/retro_pepsi_can/model.config) | `models/retro_pepsi_can/` | 2018 *FWTeastwood* | [![License: CC BY 4.0](https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/) |
+| [Unknown Weed](models/unknown_weed/model.config) | `models/unknown_weed/` | 2016 *aaron_nerlich* | [![License: CC BY 4.0](https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/) |
+
+### Textures
+| Name | Path | Copyright | License |
+|:---- |:---- |:--------- |:------- |
+| [grass](https://cc0textures.com/view?id=Ground003) | [`Media/models/materials/textures/`](Media/models/materials/textures/) | 2018 *CC0Textures.com* | [![License: CC0-1.0](https://img.shields.io/badge/License-CC0%201.0-lightgrey.svg)](http://creativecommons.org/publicdomain/zero/1.0/) |

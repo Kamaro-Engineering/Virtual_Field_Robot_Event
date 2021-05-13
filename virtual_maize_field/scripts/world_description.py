@@ -6,47 +6,56 @@ import argparse
 import inspect
 from datetime import datetime
 
-AVAILABLE_TYPES = ["cylinder", "maize_01", "maize_02"]
+AVAILABLE_CROP_TYPES = ["cylinder", "maize_01", "maize_02"]
+AVAILABLE_WEED_TYPES = ["nettle", "unknown_weed"]
+AVAILABLE_LITTER_TYPES = ["ale", "beer", "coke_can", "retro_pepsi_can"]
 AVAILABLE_OBSTACLES = ["box", "stone_01", "stone_02"]
 AVAILABLE_ILANDS = []
-AVAILABLE_SEGMENTS = ["straight", "curved", "iland"]
+AVAILABLE_SEGMENTS = ["straight", "curved", "island"]
 
 
 class WorldDescription:
     def __init__(
         self,
-        row_length=15.0,
+        row_length=12.0,
+        rows_curve_budget=np.pi / 2,
         row_width=0.75,
         rows_left=2,
         rows_right=2,
-        rows_curve_budget=np.pi / 2,
         row_segments=",".join(AVAILABLE_SEGMENTS[:2]),
         row_segment_straight_length_min=1,
         row_segment_straight_length_max=2.5,
         row_segment_curved_radius_min=3.0,
         row_segment_curved_radius_max=10.0,
-        row_segment_curved_arc_measure_min=1,
-        row_segment_curved_arc_measure_max=2.5,
+        row_segment_curved_arc_measure_min=0.3,
+        row_segment_curved_arc_measure_max=1.0,
         row_segment_island_radius_min=1.0,
         row_segment_island_radius_max=3.0,
-        ground_max_elevation=0.2,
+        ground_resolution=0.02,
+        ground_elevation_max=0.2,
         plant_spacing_min=0.13,
         plant_spacing_max=0.19,
         plant_height_min=0.3,
         plant_height_max=0.6,
         plant_radius=0.3,
         plant_radius_noise=0.05,
-        plant_placement_error_max=0.03,
+        plant_placement_error_max=0.02,
         plant_mass=0.3,
-        plant_dropout=0.0,
-        plant_types=",".join(AVAILABLE_TYPES[1:]),
+        hole_prob=0.0,
+        hole_size_max=7,
+        crop_types=",".join(AVAILABLE_CROP_TYPES[1:]),
+        litters=0,
+        litter_types=",".join(AVAILABLE_LITTER_TYPES),
+        weeds=0,
+        weed_types=",".join(AVAILABLE_WEED_TYPES),
+        ghost_objects=False,
         load_from_file=None,
-        seed=None,
+        seed=-1,
     ):
 
         row_segments = row_segments.split(",")
 
-        if seed is None:
+        if seed == -1:
             seed = int(datetime.now().timestamp() * 1000) % 8192
 
         for k, v in locals().items():
@@ -62,7 +71,8 @@ class WorldDescription:
     def random_description(self):
         self.structure = dict()
         self.structure["params"] = {
-            "ground_max_elevation": self.ground_max_elevation,
+            "ground_resolution": self.ground_resolution,
+            "ground_elevation_max": self.ground_elevation_max,
             "plant_spacing_min": self.plant_spacing_min,
             "plant_spacing_max": self.plant_spacing_max,
             "plant_height_min": self.plant_height_min,
@@ -71,13 +81,20 @@ class WorldDescription:
             "plant_radius_noise": self.plant_radius_noise,
             "plant_placement_error_max": self.plant_placement_error_max,
             "plant_mass": self.plant_mass,
-            "plant_dropout": self.plant_dropout,
-            "plant_types": self.plant_types,
+            "hole_prob": self.hole_prob,
+            "hole_size_max": self.hole_size_max,
+            "crop_types": self.crop_types,
+            "litter_types": self.litter_types,
+            "litters": self.litters,
+            "weed_types": self.weed_types,
+            "weeds": self.weeds,
+            "ghost_objects": self.ghost_objects,
             "seed": self.seed,
         }
 
         self.structure["segments"] = []
         current_row_length = 0
+        current_curve = 0
 
         while current_row_length < self.row_length:
             # Choose rendom segment
@@ -86,10 +103,7 @@ class WorldDescription:
             if segment_name == "straight":
                 length = (
                     np.random.rand()
-                    * (
-                        self.row_segment_straight_length_max
-                        - self.row_segment_straight_length_min
-                    )
+                    * (self.row_segment_straight_length_max - self.row_segment_straight_length_min)
                     + self.row_segment_straight_length_min
                 )
 
@@ -100,13 +114,9 @@ class WorldDescription:
             elif segment_name == "curved":
                 radius = (
                     np.random.rand()
-                    * (
-                        self.row_segment_curved_radius_max
-                        - self.row_segment_curved_radius_min
-                    )
+                    * (self.row_segment_curved_radius_max - self.row_segment_curved_radius_min)
                     + self.row_segment_curved_radius_min
                 )
-                curve_dir = np.random.randint(2)
                 arc_measure = (
                     np.random.rand()
                     * (
@@ -115,6 +125,11 @@ class WorldDescription:
                     )
                     + self.row_segment_curved_arc_measure_min
                 )
+                curve_dir = np.random.randint(2)
+                if current_curve + arc_measure > self.rows_curve_budget:
+                    curve_dir = 1
+                elif current_curve - arc_measure < -self.rows_curve_budget:
+                    curve_dir = 0
 
                 segment = {
                     "type": "curved",
@@ -124,18 +139,14 @@ class WorldDescription:
                 }
 
                 current_row_length += (
-                    arc_measure
-                    * ((self.rows_left + self.rows_right) * self.row_width + radius)
-                    / 2
+                    arc_measure * ((self.rows_left + self.rows_right) * self.row_width + radius) / 2
                 )
+                current_curve = arc_measure if not curve_dir else -arc_measure
 
             elif segment_name == "island":
                 radius = (
                     np.random.rand()
-                    * (
-                        self.row_segment_island_radius_max
-                        - self.row_segment_island_radius_min
-                    )
+                    * (self.row_segment_island_radius_max - self.row_segment_island_radius_min)
                     + self.row_segment_island_radius_min
                 )
                 island_row = np.random.randint(self.rows_left + self.rows_right - 1) + 1
