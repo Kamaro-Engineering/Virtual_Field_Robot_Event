@@ -256,6 +256,7 @@ class Field2DGenerator:
         self.heightmap_elevation = DITCH_DEPTH + (max_elevation / 2)
 
         heightmap *= ((max_elevation) / self.heightmap_elevation)
+        field_height = ((DITCH_DEPTH - (max_elevation / 2)) / self.heightmap_elevation)
 
         field_mask = np.ones((image_size, image_size))
 
@@ -264,6 +265,9 @@ class Field2DGenerator:
             return int(pos // self.resolution) + offset
 
         # Make plant placements flat and save the heights for the sdf renderer
+        PLANT_FOOTPRINT = (2 * 0.02**2) ** 0.5
+        flatspot_radius = int((PLANT_FOOTPRINT / 2) // self.resolution) + 2
+
         self.placements_ground_height = []
         for mx, my in self.placements:
             px = metric_to_pixel(mx)
@@ -272,10 +276,8 @@ class Field2DGenerator:
             field_mask = cv2.circle(field_mask, (px, py), int((DITCH_DISTANCE + DITCH_WIDTH) / self.resolution), 0, -1)
 
             height = heightmap[py, px]
-            heightmap = cv2.circle(heightmap, (px, py), 2, height, -1)
-            self.placements_ground_height.append(
-                self.heightmap_elevation * height
-            )
+            heightmap = cv2.circle(heightmap, (px, py), flatspot_radius, height, -1)
+            self.placements_ground_height.append(field_height + height)
 
         # raise field to create a ditch
         for mx, my in self.placements:
@@ -286,7 +288,7 @@ class Field2DGenerator:
         blur_size = (int(0.2 / self.resolution) // 2) * 2 + 1
         field_mask = cv2.GaussianBlur(field_mask, (blur_size, blur_size), 0)
 
-        heightmap += ((DITCH_DEPTH - (max_elevation / 2)) / self.heightmap_elevation) * field_mask
+        heightmap += field_height * field_mask
 
         assert(heightmap.max() <= 1)
         assert(heightmap.min() >= 0)
